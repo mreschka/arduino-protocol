@@ -34,13 +34,10 @@ extern "C" {
 #include "tiny_defines.h"
 
 /// \cond
-#if defined(CONFIG_ENABLE_FCS16) || defined(CONFIG_ENABLE_FCS32) || defined(CONFIG_ENABLE_CHECKSUM)
-    #define TINY_FCS_ENABLE
-    #ifdef CONFIG_ENABLE_FCS32
-        typedef uint32_t fcs_t;
-    #else
-        typedef uint16_t fcs_t;
-    #endif
+#ifdef CONFIG_ENABLE_FCS32
+    typedef uint32_t fcs_t;
+#else
+    typedef uint16_t fcs_t;
 #endif
 /// \endcond
 
@@ -48,12 +45,13 @@ extern "C" {
  * @defgroup ERROR_FLAGS Return error codes for Tiny API functions
  * @{
  */
-
+/// Tiny operation successful. Only tiny_send_start and tiny_read_start functions return this code
+#define TINY_SUCCESS                    (1)
 /// No error. For tiny_send and tiny_read functions, this means, no data sent or received
 #define TINY_NO_ERROR                   (0)
-/// Generic error.
+/// Timeout
 #define TINY_ERR_FAILED                 (-1)
-/// Timeout happened. Not actually used for now.
+/// Timeout happened. The function must be called once again.
 #define TINY_ERR_TIMEOUT                (-2)
 /// Data too large to fit the user buffer, valid for tiny_read function
 #define TINY_ERR_DATA_TOO_LARGE         (-3)
@@ -73,8 +71,10 @@ extern "C" {
 
 /// This flag makes tiny API functions perform as non-blocking
 #define TINY_FLAG_NO_WAIT               (0)
+/// This flag makes tiny_read function to read whole frame event if it doesn't fit the buffer
+#define TINY_FLAG_READ_ALL              (1)
 /// This flag makes tiny API functions perform in blocking mode
-#define TINY_FLAG_WAIT_FOREVER          (1)
+#define TINY_FLAG_WAIT_FOREVER          (0x80)
 
 /** @} */
 
@@ -83,11 +83,8 @@ typedef enum
 {
     TINY_TX_STATE_IDLE,
     TINY_TX_STATE_START,
-    TINY_TX_STATE_SEND_UID,
     TINY_TX_STATE_SEND_DATA,
-#ifdef TINY_FCS_ENABLE
     TINY_TX_STATE_SEND_CRC,
-#endif
     TINY_TX_STATE_END
 } ETinyTxState;
 
@@ -95,7 +92,6 @@ typedef enum
 {
     TINY_RX_STATE_IDLE,
     TINY_RX_STATE_START,
-    TINY_RX_STATE_READ_UID,
     TINY_RX_STATE_READ_DATA,
     TINY_RX_STATE_END
 } ETinyRxState;
@@ -121,11 +117,7 @@ typedef enum
  * @return the function must return negative value in case of error or number of bytes written
  *         or zero.
  */
-#ifndef ARDUINO_NANO
 typedef int (*write_block_cb_t)(void *pdata, const uint8_t *buffer, int size);
-#else
-typedef int (*write_block_cb_t)(const uint8_t *buffer, int size);
-#endif
 
 /**
  * The function reads data from communication channel.
@@ -136,11 +128,7 @@ typedef int (*write_block_cb_t)(const uint8_t *buffer, int size);
  * @return the function must return negative value in case of error or number of bytes actually read
  *         or zero.
  */
-#ifndef ARDUINO_NANO
 typedef int (*read_block_cb_t)(void *pdata, uint8_t *buffer, int size);
-#else
-typedef int (*read_block_cb_t)(uint8_t *buffer, int size);
-#endif
 
 
 /**
@@ -186,12 +174,10 @@ typedef struct
     int                 framelen;
     /// The state of Receive State machine
     uint8_t             inprogress;
-#ifdef TINY_FCS_ENABLE
     /// The field contains calculated checksum and not available in TINY_MINIMAL configuration
     fcs_t               fcs;
-#endif
     /// \cond
-    uint16_t            uid;
+    uint8_t             blockIndex;
     uint8_t             bits;
     uint8_t             prevbyte;
     /// \endcond
@@ -212,12 +198,10 @@ typedef struct
     int                 framelen;
     /// @see ETinyTxState
     uint8_t             inprogress;
-#ifdef TINY_FCS_ENABLE
     /// The field contains calculated checksum and not available in TINY_MINIMAL configuration
     fcs_t               fcs;                       // fcs field
-#endif
     /// \cond
-    uint16_t            uid;                       // uid field
+    uint8_t             blockIndex;                // index of the frame block being processed
     uint8_t             prevbyte;                  // last byte sent
     uint8_t             bits;                      // index of crc byte being sent
     /// \endcond
@@ -229,6 +213,10 @@ typedef struct
 *
 **************************************************************/
 
+/**
+ * This structure contains information about communication channel and its state.
+ * \warning This is for internal use only, and should not be accessed directly from the application.
+ */
 typedef struct
 {
     /// pointer to platform related write function
@@ -236,9 +224,7 @@ typedef struct
     /// pointer to platform related read function
     read_block_cb_t     read_func;
     /// pointer to application defined data, passed during protocol initialization - absent in Arduino version
-#ifndef ARDUINO_NANO
     void*               pdata;
-#endif
     /// @see STinyRxStatus
     STinyRxStatus       rx;
     /// @see STinyTxStatus
@@ -249,10 +235,8 @@ typedef struct
 #ifdef PLATFORM_COND
     PLATFORM_COND       send_condition;            // Condition is called, when send operation is completed
 #endif
-#ifdef TINY_FCS_ENABLE
     /// The field contains number of bits to use for FCS and not available in TINY_MINIMAL configuration
     uint8_t             fcs_bits;
-#endif
 #ifdef CONFIG_ENABLE_STATS
     /// @see STinyStats
     STinyStats          stat;
@@ -269,6 +253,10 @@ typedef struct
 } STinyData;
 
 
+/**
+ * @defgroup SIMPLE_API Tiny simple API functions
+ * @{
+ */
 
 /**
 * The function initializes internal structures for Tiny channel and return handle
@@ -282,17 +270,10 @@ typedef struct
 * @see read_block_cb_t
 * @return TINY_NO_ERROR or error code.
 */
-#ifndef ARDUINO_NANO
 extern int tiny_init(STinyData *handle,
                write_block_cb_t write_func,
                read_block_cb_t read_func,
                void *pdata);
-#else
-extern int tiny_init(STinyData *handle,
-               write_block_cb_t write_func,
-               read_block_cb_t read_func);
-#endif
-
 
 /**
 * The function closes  channel.
@@ -304,23 +285,15 @@ extern int tiny_close(STinyData *handle);
 
 
 /**
- * The function sets number of bits used for fcs
- * @param handle - pointer to Tiny structure
- * @param bits - number of bits to use for fcs: 16 or 32.
- * @return TINY_ERR_FAILED
- *         TINY_NO_ERROR
- */
-extern int tiny_set_fcs_bits(STinyData *handle, uint8_t bits);
-
-
-/**
+ * @brief sends frame to user payload to communication channel
+ *
  * The function sends data to communication channel in the following
  * frame format: 0x7E, data..., FCS, 0x7E.
  * \note if flags field is set to TINY_FLAG_NO_WAIT, then this function may remember pbuf
  *       pointer and return immediately. So, it is responsibility of the caller to make
  *       pbuf data to be available all the time until frame is sent.
  * @param handle - pointer to Tiny data.
- * @param uid - pointer to 16-bit variable containing packet uid, can be NULL.
+ * @param uid - pointer to 16-bit variable containing packet uid, can be NULL. uid value must be spelled in network order bytes.
  * @param pbuf - a const pointer to unsigned char - buffer with data to send
  * @param len - an integer argument - length of data to send
  * @param flags - TINY_FLAG_NO_WAIT
@@ -349,6 +322,209 @@ extern int tiny_send(STinyData *handle, uint16_t *uid, uint8_t * pbuf, int len, 
  * @return TINY_ERR_INVALID_DATA, TINY_ERR_FAILED or number of sent bytes.
  */
 extern int tiny_read(STinyData *handle, uint16_t *uid, uint8_t *pbuf, int len, uint8_t flags);
+
+/**
+ * @}
+ */
+
+/**
+ * @defgroup ADVANCED_API Tiny advanced API functions
+ * @{
+ */
+
+/**
+ * The function sets number of bits used for fcs
+ * @param handle - pointer to Tiny structure
+ * @param bits - number of bits to use for fcs: 16 or 32.
+ * @return TINY_ERR_FAILED
+ *         TINY_NO_ERROR
+ */
+extern int tiny_set_fcs_bits(STinyData *handle, uint8_t bits);
+
+
+/**
+ * @brief initiates sending of a new frame
+ *
+ * The function initiates sending of a new frame by writing frame start marker to
+ * communication channel. If the function is executed successfully, then
+ * tiny_send_buffer and tiny_send_end can be used to pass the data.
+ *
+ * @param handle - pointer to Tiny data.
+ * @param flags - TINY_FLAG_NO_WAIT or TINY_FLAG_WAIT_FOREVER
+ * @return TINY_SUCCESS if new frame transmission is started successfully
+ *         TINY_ERR_TIMEOUT if non-blocking operation is requested and the channel is busy
+ *         TINY_ERR_FAILED if writing to the channel failed
+ *         TINY_ERR_INVALID_DATA if invalid handle is passed
+ *
+ * @see TINY_SUCCESS
+ * @see TINY_ERR_INVALID_DATA
+ * @see TINY_ERR_TIMEOUT
+ * @see TINY_ERR_FAILED
+ * @see TINY_FLAG_NO_WAIT
+ * @see TINY_FLAG_WAIT_FOREVER
+ */
+extern int tiny_send_start(STinyData *handle, uint8_t flags);
+
+/**
+ * @brief sends user provided data in the body of the frame
+ *
+ * The function sends user provided data (payload) in the body of the frame.
+ * It is possible to send several buffers if the single frame. In this case
+ * the receiver side will receive all buffers as one data block. Extended read
+ * functions allow to read data of the frame to several buffers.
+ * If function is in non-blocking mode, it may return immediately with
+ * TINY_NO_ERROR. In this case a user should call this function later with the
+ * same parameters.
+
+ * \note if flags field is set to TINY_FLAG_NO_WAIT, then this function may remember pbuf
+ *       pointer and return immediately. So, it is responsibility of the caller to make
+ *       pbuf data to be available all the time until frame is sent.
+ *
+ * @param handle - pointer to Tiny data.
+ * @param pbuf - pointer to buffer with data to send.
+ * @param len - length of the data to send in bytes.
+ * @param flags - TINY_FLAG_NO_WAIT or TINY_FLAG_WAIT_FOREVER
+ * @return length in bytes of data sent if executed successfully
+ *         TINY_NO_ERROR if non-blocking operation is requested and the channel is busy
+ *         TINY_ERR_FAILED if writing to the channel failed
+ *         TINY_ERR_INVALID_DATA if invalid handle is passed
+ *
+ * @see TINY_SUCCESS
+ * @see TINY_ERR_INVALID_DATA
+ * @see TINY_ERR_TIMEOUT
+ * @see TINY_ERR_FAILED
+ * @see TINY_FLAG_NO_WAIT
+ * @see TINY_FLAG_WAIT_FOREVER
+ * @warning any failed send operation (tiny_send_buffer, tiny_send_end), except timeout cases,
+ *          must be terminated with tiny_send_terminate, otherwise the thread can be blocked.
+ */
+extern int tiny_send_buffer(STinyData *handle, uint8_t * pbuf, int len, uint8_t flags);
+
+
+/**
+ * @brief completes sending of a new frame
+ *
+ * The function completes sending of a new frame by writing FCS block and frame end marker to
+ * communication channel. If the function is executed successfully, then
+ * tiny_send_start can be executed again.
+ *
+ * @param handle - pointer to Tiny data.
+ * @param flags - TINY_FLAG_NO_WAIT or TINY_FLAG_WAIT_FOREVER
+ * @return TINY_SUCCESS if send frame is completed successfully.
+ *         TINY_ERR_TIMEOUT/TINY_NO_ERROR if non-blocking operation is requested and the channel is busy
+ *         TINY_ERR_FAILED if writing to the channel failed
+ *         TINY_ERR_INVALID_DATA if invalid handle is passed
+ *
+ * @see TINY_SUCCESS
+ * @see TINY_NO_ERROR
+ * @see TINY_ERR_INVALID_DATA
+ * @see TINY_ERR_TIMEOUT
+ * @see TINY_ERR_FAILED
+ * @see TINY_FLAG_NO_WAIT
+ * @see TINY_FLAG_WAIT_FOREVER
+ */
+extern int tiny_send_end(STinyData *handle, uint8_t flags);
+
+/**
+ * @brief terminates send operation
+ *
+ * This function is to be used, when it is required to reset send state in
+ * case of communication error
+ *
+ * @param handle - pointer to Tiny data.
+ */
+extern void tiny_send_terminate(STinyData *handle);
+
+/**
+ * @brief initiates receiving of a new frame
+ *
+ * The function initiates receiving of a new frame. It waits for frame start
+ * marker in communication channel. If any character different from
+ * frame start marker is read from communication channel, it returns
+ * TINY_ERR_OUT_OF_SYNC. Just call it once more in this case.
+ * If the function is executed successfully, then tiny_read_buffer
+ * can be used to read user data from communication channel.
+ *
+ * @param handle - pointer to Tiny data.
+ * @param flags - TINY_FLAG_NO_WAIT, TINY_FLAG_WAIT_FOREVER.
+ * @return TINY_SUCCESS if new frame is detected in communication channel.
+ *         TINY_NO_ERROR if nothing is awaiting in the communication channel and
+ *                       function is in non-blocking mode
+ *         TINY_ERR_FAILED if writing to the channel failed
+ *         TINY_ERR_INVALID_DATA if invalid handle is passed
+ *         TINY_ERR_OUT_OF_SYNC if not valid byte is received
+ *
+ * @see TINY_SUCCESS
+ * @see TINY_ERR_INVALID_DATA
+ * @see TINY_NO_ERROR
+ * @see TINY_ERR_OUT_OF_SYNC
+ * @see TINY_ERR_FAILED
+ * @see TINY_FLAG_NO_WAIT
+ * @see TINY_FLAG_WAIT_FOREVER
+ */
+extern int tiny_read_start(STinyData * handle, uint8_t flags);
+
+
+/**
+ * @brief reads frame payload to provided buffer
+ *
+ * The function reads frame payload to provided buffer. Without TINY_FLAG_READ_ALL
+ * the function reads no more byte than len, passed to the function. If provided buffer
+ * is filled completely, but there are more bytes to read, then the function returns
+ * TINY_ERR_DATA_TOO_LARGE (indicating that tiny_read_buffer must be called
+ * once again for next portion of bytes). Otherwise, tiny_read_buffer() returns number of
+ * bytes contained in the received frame.
+ *
+ * If frame payload is too big to fit to provided buffer, but it is required to read
+ * whole frame from the communication channel till the end marker, TINY_FLAG_READ_ALL can be specified.
+ * In this case, the function will fill provided buffer with frame bytes, and
+ * bytes in the end of frame will be lost. The function returns TINY_ERR_DATA_TOO_LARGE, but this
+ * means that frame data didn't fit to buffer, and frame is completely received.
+ *
+ * If function is in non-blocking mode, it may return immediately with
+ * TINY_NO_ERROR. In this case a user should call this function later with the
+ * same parameters.
+ *
+ * \note if flags field is set to TINY_FLAG_NO_WAIT, then this function may remember pbuf
+ *       pointer and return immediately. So, it is responsibility of the caller to make
+ *       pbuf to be available all the time until block of data is received.
+ *
+ * \note The read data can be considered as valid, only when last buffer is successfully read.
+ *       That is tiny_read_buffer function returns length of read bytes (>0), or tiny_read_buffer
+ *       function returns TINY_ERR_DATA_TOO_LARGE if TINY_FLAG_READ_ALL flag is specified.
+ *
+ * @param handle - pointer to Tiny data.
+ * @param pbuf - pointer to buffer to read frame data to.
+ * @param len - length of the provided buffer in bytes.
+ * @param flags - TINY_FLAG_NO_WAIT or TINY_FLAG_WAIT_FOREVER, can be combined with TINY_FLAG_READ_ALL
+ * @return length in bytes of data received if executed successfully
+ *         TINY_NO_ERROR if non-blocking operation is requested and the channel is busy
+ *         TINY_ERR_FAILED if writing to the channel failed
+ *         TINY_ERR_INVALID_DATA if invalid handle is passed
+ *         TINY_ERR_DATA_TOO_LARGE if all data do not fit in buffer.
+ *
+ * @see TINY_SUCCESS
+ * @see TINY_ERR_INVALID_DATA
+ * @see TINY_ERR_FAILED
+ * @see TINY_ERR_DATA_TOO_LARGE
+ * @see TINY_FLAG_NO_WAIT
+ * @see TINY_FLAG_WAIT_FOREVER
+ * @see TINY_FLAG_READ_ALL
+ * @warning any failed read operation (tiny_read_buffer), except TINY_ERR_DATA_TOO_LARGE case,
+ *          must be terminated with tiny_read_terminate.
+ */
+extern int tiny_read_buffer(STinyData *handle, uint8_t *pbuf, int len, uint8_t flags);
+
+
+/**
+ * @brief terminates read operation
+ *
+ * This function is to be used, when it is required to reset receive state in
+ * case of communication error
+ *
+ * @param handle - pointer to Tiny data.
+ */
+extern void tiny_read_terminate(STinyData *handle);
 
 
 #ifdef CONFIG_ENABLE_STATS
@@ -385,6 +561,10 @@ extern int tiny_set_callbacks(STinyData *handle,
                on_frame_cb_t read_cb,
                on_frame_cb_t send_cb);
 #endif /* CONFIG_ENABLE_STATS */
+
+/**
+ * @}
+ */
 
 
 #ifdef __cplusplus
