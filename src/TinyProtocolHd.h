@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2017 (C) Alexey Dynda
+    Copyright 2017 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -29,7 +29,7 @@
 #define _TINY_PROTOCOL_H_
 
 #include "TinyPacket.h"
-#include "proto/tiny_layer2.h"
+#include "proto/tiny_hd.h"
 
 #ifdef ARDUINO
 #   include <HardwareSerial.h>
@@ -40,14 +40,26 @@
 namespace Tiny {
 
 /**
- *  Proto class incapsulates Protocol functionality.
+ *  ProtoHd class incapsulates Half Duplex Protocol functionality.
+ *  Half Duplex version of the Protocol allows to send messages with
+ *  confirmation.
  *  Remember that you may use always C-style API functions
  *  instead C++. Please refer to documentation.
  */
-class Proto
+class ProtoHd
 {
+private:
+    STinyHdData         m_data;
+
 public:
-    inline Proto() { m_uidEnabled = false; }
+    inline ProtoHd(void * buffer,
+                   int    bufferSize,
+                   void (*onReceive)(uint8_t *buf, int len))
+    {
+        m_buffer      = buffer;
+        m_bufferSize  = bufferSize;
+        m_onReceive   = onReceive;
+    }
 
     /**
      * Initializes protocol internal variables.
@@ -122,45 +134,31 @@ public:
      * Sends data block over communication channel.
      * @param buf - data to send
      * @param size - length of the data in bytes
-     * @param flags - flags. @ref FLAGS_GROUP
      * @return negative value in case of error
      *         zero if nothing is sent
      *         positive - should be equal to size parameter
      */
-    int  write          (char* buf, int size, uint8_t flags = TINY_FLAG_WAIT_FOREVER);
-
-    /**
-     * Reads data block from communication channel.
-     * @param buf - buffer to place data read from communication channel
-     * @param size - maximum size of the buffer in bytes.
-     * @param flags - @ref FLAGS_GROUP
-     * @return negative value in case of error
-     *         zero if nothing is read
-     *         positive - number of bytes read from the channel
-     */
-    int  read           (char* buf, int size, uint8_t flags = TINY_FLAG_WAIT_FOREVER);
+    int  write          (char* buf, int size);
 
     /**
      * Sends packet over communication channel.
      * @param pkt - Packet to send
-     * @param flags - @ref FLAGS_GROUP
      * @see Packet
      * @return negative value in case of error
      *         zero if nothing is sent
      *         positive - Packet is successfully sent
      */
-    int  write          (Packet &pkt, uint8_t flags = TINY_FLAG_WAIT_FOREVER);
+    int  write          (Packet &pkt);
 
     /**
-     * Reads packet from communication channel.
-     * @param pkt - Packet object to put data to
-     * @param flags - @ref FLAGS_GROUP
-     * @see Packet
+     * Checks communcation channel for incoming messages.
      * @return negative value in case of error
      *         zero if nothing is read
      *         positive - Packet is successfully received
+     * @remark if Packet is receive during run execution
+     *         callback is called.
      */
-    int  read           (Packet &pkt, uint8_t flags = TINY_FLAG_WAIT_FOREVER);
+    int  run            ();
 
     /**
      * Disable CRC field in the protocol.
@@ -197,25 +195,12 @@ public:
      */
     bool enableCrc32    ();
 
-    /**
-     * Enables Uid field in the protocol. If enabled this 16-bit field
-     * with packet identifier is added before each payload data.
-     * Frame with uid: 0x7E 16-bituid payload 0x7E
-     * Frame without uid: 0x7E payload 0x7E
-     */
-    inline void enableUid() { m_uidEnabled = true; }
-
-    /**
-     * Disables Uid field in the protocol. If enabled this 16-bit field
-     * with packet identifier is added before each payload data. 
-     * Frame with uid: 0x7E 16-bituid payload 0x7E
-     * Frame without uid: 0x7E payload 0x7E
-     */
-    inline void disableUid(){ m_uidEnabled = false; }
-
 private:
-    STinyData           m_data;
-    uint8_t             m_uidEnabled;
+    void               *m_buffer;
+    int                 m_bufferSize;
+    void              (*m_onReceive)(uint8_t *buf, int len);
+    static void         onReceiveInternal(void *handle, uint16_t uid, uint8_t *pdata, int size);
+
 };
 
 
