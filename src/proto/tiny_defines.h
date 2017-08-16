@@ -53,6 +53,10 @@
 
 #define PLATFORM_TICKS()    millis()
 
+#ifdef __linux__
+#include <stdint.h>
+static inline uint32_t millis() { return 0; }
+#endif
 
 #endif /* _TINY_DEFINES_H_ */
 

@@ -31,6 +31,7 @@
 #ifdef ARDUINO
 #   include <HardwareSerial.h>
 #else
+#   include <stdint.h>
 #   include <string.h>
 #endif
 
@@ -190,6 +191,7 @@ public:
 private:
     friend class        Proto;
     friend class        ProtoHd;
+    friend class        ProtoLight;
 
     uint8_t*            m_buf;
     uint16_t            m_uid;

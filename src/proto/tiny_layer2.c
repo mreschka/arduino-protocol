@@ -39,9 +39,6 @@
 *************************************************************/
 
 #define FLAG_SEQUENCE            0x7E
-#define ADDRESS_FIELD            0xFF
-#define CONTROL_FILED            0x03
-#define PROTOCOL_FIELD           0x00 // 8 or 16 bit
 #define TINY_ESCAPE_CHAR         0x7D
 #define TINY_ESCAPE_BIT          0x20
 

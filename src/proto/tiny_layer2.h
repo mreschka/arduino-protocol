@@ -1,5 +1,5 @@
 /*
-    Copyright 2016 (C) Alexey Dynda
+    Copyright 2016-2017 (C) Alexey Dynda
 
     This file is part of Tiny Protocol Library.
 
@@ -214,12 +214,16 @@ typedef struct
  */
 typedef struct
 {
+    /// pointer to application defined data, passed during protocol initialization - absent in Arduino version
+    void*               pdata;
+#ifdef CONFIG_ENABLE_STATS
+    /// @see STinyStats
+    STinyStats          stat;
+#endif
     /// pointer to platform related write function
     write_block_cb_t    write_func;
     /// pointer to platform related read function
     read_block_cb_t     read_func;
-    /// pointer to application defined data, passed during protocol initialization - absent in Arduino version
-    void*               pdata;
     /// @see STinyRxStatus
     STinyRxStatus       rx;
     /// @see STinyTxStatus
@@ -232,10 +236,6 @@ typedef struct
 #endif
     /// The field contains number of bits to use for FCS and not available in TINY_MINIMAL configuration
     uint8_t             fcs_bits;
-#ifdef CONFIG_ENABLE_STATS
-    /// @see STinyStats
-    STinyStats          stat;
-#endif
     /// pointer to callback function
     /** This callback is called when it is not null and when
         new frame is successfully received.
